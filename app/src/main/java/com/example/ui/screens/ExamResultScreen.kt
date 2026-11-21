@@ -26,6 +26,8 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.ExamResult
 import com.example.data.Student
+import com.example.pdf.CombinedStudentExamSummary
+import com.example.pdf.PdfDrawHelpers
 import com.example.pdf.PdfReportGenerator
 import com.example.ui.components.EmptyListState
 import com.example.ui.components.IslamicTopBar
@@ -48,11 +50,13 @@ fun ExamResultScreen(
     val selectedExamType by viewModel.selectedExamType.collectAsStateWithLifecycle()
     val selectedYear by viewModel.selectedYear.collectAsStateWithLifecycle()
     val examResults by viewModel.examResultsForSelection.collectAsStateWithLifecycle()
+    val allYearResults by viewModel.allExamResultsForYear.collectAsStateWithLifecycle()
     val madrasaInfo by viewModel.madrasaInfo.collectAsStateWithLifecycle()
 
     val examTypes = remember {
         listOf("প্রথম সাময়িক পরীক্ষা", "দ্বিতীয় সাময়িক পরীক্ষা", "বার্ষিক পরীক্ষা")
     }
+    var isCombinedTabSelected by remember { mutableStateOf(false) }
 
     val studentsMap = remember(students) { students.associateBy { it.id } }
     val resultsMap = remember(examResults) { examResults.associateBy { it.studentId } }
@@ -65,13 +69,24 @@ fun ExamResultScreen(
         sortedResults.mapIndexed { index, res -> res.studentId to (index + 1) }.toMap()
     }
 
+    val combinedSummaries = remember(students, allYearResults) {
+        PdfDrawHelpers.buildCombinedExamSummaries(students, allYearResults)
+    }
+    val combinedMap = remember(combinedSummaries) {
+        combinedSummaries.associateBy { it.student.id }
+    }
+
     var editingStudentForResult by remember { mutableStateOf<Student?>(null) }
 
     Scaffold(
         topBar = {
             IslamicTopBar(
                 title = "৮. পরীক্ষার রেজাল্ট",
-                subtitle = "$selectedExamType (${BengaliUtils.toBn(selectedYear)})",
+                subtitle = if (isCombinedTabSelected) {
+                    "৩ পরীক্ষার সমন্বিত ফলাফল (${BengaliUtils.toBn(selectedYear)})"
+                } else {
+                    "$selectedExamType (${BengaliUtils.toBn(selectedYear)})"
+                },
                 onBack = onBack
             )
         },
@@ -85,19 +100,22 @@ fun ExamResultScreen(
         ) {
             Spacer(modifier = Modifier.height(10.dp))
 
-            // Exam Type Tabs
+            // Exam Type Tabs + Combined 3-Exam Tab
             LazyRow(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 items(examTypes) { exam ->
-                    val isSelected = exam == selectedExamType
+                    val isSelected = !isCombinedTabSelected && exam == selectedExamType
                     Surface(
                         shape = RoundedCornerShape(20.dp),
                         color = if (isSelected) IslamicGreenPrimary else IslamicDarkSurfaceVariant,
                         border = CardDefaults.outlinedCardBorder(),
                         modifier = Modifier
-                            .clickable { viewModel.selectedExamType.value = exam }
+                            .clickable {
+                                isCombinedTabSelected = false
+                                viewModel.selectedExamType.value = exam
+                            }
                             .testTag("tab_result_exam_$exam")
                     ) {
                         Text(
@@ -110,11 +128,31 @@ fun ExamResultScreen(
                         )
                     }
                 }
+
+                item {
+                    Surface(
+                        shape = RoundedCornerShape(20.dp),
+                        color = if (isCombinedTabSelected) IslamicGold else IslamicDarkSurfaceVariant,
+                        border = CardDefaults.outlinedCardBorder(),
+                        modifier = Modifier
+                            .clickable { isCombinedTabSelected = true }
+                            .testTag("tab_result_combined_3_exams")
+                    ) {
+                        Text(
+                            text = "৩ পরীক্ষার সমন্বিত",
+                            style = MaterialTheme.typography.labelMedium.copy(
+                                fontWeight = FontWeight.Bold,
+                                color = if (isCombinedTabSelected) Color.Black else IslamicGoldLight
+                            ),
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)
+                        )
+                    }
+                }
             }
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            // PDF Download Options Card (পরীক্ষা ভিত্তিক ও বাৎসরিক পিডিএফ)
+            // PDF Download Options Card (পরীক্ষা ভিত্তিক ও ৩ পরীক্ষার বাৎসরিক সমন্বিত পিডিএফ)
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(14.dp),
@@ -134,14 +172,27 @@ fun ExamResultScreen(
                     ) {
                         Button(
                             onClick = {
-                                PdfReportGenerator.generateExamResultPdf(
-                                    context = context,
-                                    madrasa = madrasaInfo,
-                                    resultsList = examResults,
-                                    studentsMap = studentsMap,
-                                    examType = selectedExamType,
-                                    year = selectedYear
-                                )
+                                if (isCombinedTabSelected) {
+                                    coroutineScope.launch {
+                                        val yearResults = viewModel.getAllExamResultsForYear(selectedYear).firstOrNull() ?: allYearResults
+                                        PdfReportGenerator.generateCombinedAnnualExamResultPdf(
+                                            context = context,
+                                            madrasa = madrasaInfo,
+                                            students = students,
+                                            allResultsForYear = yearResults,
+                                            year = selectedYear
+                                        )
+                                    }
+                                } else {
+                                    PdfReportGenerator.generateExamResultPdf(
+                                        context = context,
+                                        madrasa = madrasaInfo,
+                                        resultsList = examResults,
+                                        studentsMap = studentsMap,
+                                        examType = selectedExamType,
+                                        year = selectedYear
+                                    )
+                                }
                             },
                             modifier = Modifier.weight(1f).testTag("btn_exam_result_pdf"),
                             colors = ButtonDefaults.buttonColors(containerColor = IslamicGreenPrimary),
@@ -150,19 +201,23 @@ fun ExamResultScreen(
                         ) {
                             Icon(Icons.Default.PictureAsPdf, contentDescription = null, modifier = Modifier.size(16.dp), tint = Color.Black)
                             Spacer(modifier = Modifier.width(4.dp))
-                            Text("রেজাল্ট শিট পিডিএফ", fontSize = 11.sp, color = Color.Black, fontWeight = FontWeight.Bold)
+                            Text(
+                                text = if (isCombinedTabSelected) "সমন্বিত রেজাল্ট শিট" else "রেজাল্ট শিট পিডিএফ",
+                                fontSize = 11.sp,
+                                color = Color.Black,
+                                fontWeight = FontWeight.Bold
+                            )
                         }
 
                         OutlinedButton(
                             onClick = {
                                 coroutineScope.launch {
-                                    val annualResults = viewModel.examResultsForSelection.value
-                                    PdfReportGenerator.generateExamResultPdf(
+                                    val yearResults = viewModel.getAllExamResultsForYear(selectedYear).firstOrNull() ?: allYearResults
+                                    PdfReportGenerator.generateCombinedAnnualExamResultPdf(
                                         context = context,
                                         madrasa = madrasaInfo,
-                                        resultsList = annualResults,
-                                        studentsMap = studentsMap,
-                                        examType = "বাৎসরিক সমন্বিত পরীক্ষা",
+                                        students = students,
+                                        allResultsForYear = yearResults,
                                         year = selectedYear
                                     )
                                 }
@@ -173,7 +228,7 @@ fun ExamResultScreen(
                         ) {
                             Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(16.dp), tint = IslamicGoldLight)
                             Spacer(modifier = Modifier.width(4.dp))
-                            Text("বাৎসরিক রেজাল্ট পিডিএফ", fontSize = 11.sp, color = IslamicGoldLight, fontWeight = FontWeight.SemiBold)
+                            Text("বাৎসরিক (৩ পরীক্ষা) PDF", fontSize = 11.sp, color = IslamicGoldLight, fontWeight = FontWeight.SemiBold)
                         }
                     }
                 }
@@ -183,6 +238,33 @@ fun ExamResultScreen(
 
             if (students.isEmpty()) {
                 EmptyListState(message = "কোনো ছাত্র পাওয়া যায়নি।")
+            } else if (isCombinedTabSelected) {
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
+                        .testTag("list_combined_exam_results"),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    contentPadding = PaddingValues(bottom = 24.dp)
+                ) {
+                    items(students, key = { it.id }) { student ->
+                        val summary = combinedMap[student.id]
+                        CombinedExamResultStudentCard(
+                            student = student,
+                            summary = summary,
+                            onDownloadCombinedMarksheet = {
+                                if (summary != null) {
+                                    PdfReportGenerator.generateCombinedIndividualStudentResultPdf(
+                                        context = context,
+                                        madrasa = madrasaInfo,
+                                        summary = summary,
+                                        year = selectedYear
+                                    )
+                                }
+                            }
+                        )
+                    }
+                }
             } else {
                 LazyColumn(
                     modifier = Modifier
@@ -395,6 +477,142 @@ fun ExamResultStudentCard(
                         Text("মার্কশিট কার্ড", fontSize = 11.sp, color = IslamicGold, fontWeight = FontWeight.SemiBold)
                     }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+fun CombinedExamResultStudentCard(
+    student: Student,
+    summary: CombinedStudentExamSummary?,
+    onDownloadCombinedMarksheet: () -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth().testTag("combined_result_card_${student.roll}"),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = IslamicDarkSurfaceVariant),
+        border = CardDefaults.outlinedCardBorder()
+    ) {
+        Column(modifier = Modifier.padding(14.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Surface(
+                        shape = RoundedCornerShape(4.dp),
+                        color = IslamicGreenContainer
+                    ) {
+                        Text(
+                            text = "রোল: ${BengaliUtils.toBn(student.roll)}",
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                color = IslamicGreenLight,
+                                fontWeight = FontWeight.Bold
+                            )
+                        )
+                    }
+
+                    Text(
+                        text = student.name,
+                        style = MaterialTheme.typography.titleSmall.copy(
+                            fontWeight = FontWeight.Bold,
+                            color = IslamicTextPrimary
+                        )
+                    )
+                }
+
+                if (summary != null) {
+                    Surface(
+                        shape = RoundedCornerShape(6.dp),
+                        color = IslamicGoldContainer
+                    ) {
+                        Text(
+                            text = "মেধাস্থান: ${BengaliUtils.toBn(summary.meritPosition)}ম",
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                color = IslamicGoldLight,
+                                fontWeight = FontWeight.Bold
+                            ),
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            if (summary != null) {
+                fun fmt(res: ExamResult?): String =
+                    if (res == null) "নেই" else "${BengaliUtils.toBn(res.totalMarks)}/${BengaliUtils.toBn(res.totalFullMarks)}"
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text("১ম সাময়িক: ${fmt(summary.firstTerm)}", style = MaterialTheme.typography.bodySmall.copy(color = IslamicTextSecondary))
+                    Text("২য় সাময়িক: ${fmt(summary.secondTerm)}", style = MaterialTheme.typography.bodySmall.copy(color = IslamicTextSecondary))
+                }
+                Spacer(modifier = Modifier.height(4.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text("বার্ষিক: ${fmt(summary.annualTerm)}", style = MaterialTheme.typography.bodySmall.copy(color = IslamicTextSecondary))
+                    Text("গড়: ${BengaliUtils.toBn(summary.percentage)}%", style = MaterialTheme.typography.bodySmall.copy(color = IslamicGoldLight, fontWeight = FontWeight.SemiBold))
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "৩ পরীক্ষার সর্বমোট: ${BengaliUtils.toBn(summary.grandTotalObtained)} / ${BengaliUtils.toBn(summary.grandTotalFull)}",
+                        style = MaterialTheme.typography.bodyMedium.copy(
+                            fontWeight = FontWeight.Bold,
+                            color = IslamicGreenLight
+                        )
+                    )
+
+                    Surface(
+                        shape = RoundedCornerShape(4.dp),
+                        color = if (summary.isOverallPassed) IslamicCheckContainer else IslamicRedContainer
+                    ) {
+                        Text(
+                            text = if (summary.isOverallPassed) "উত্তীর্ণ" else "অনুত্তীর্ণ",
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                color = if (summary.isOverallPassed) IslamicGreenLight else IslamicRed,
+                                fontWeight = FontWeight.Bold
+                            ),
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                OutlinedButton(
+                    onClick = onDownloadCombinedMarksheet,
+                    modifier = Modifier.fillMaxWidth().testTag("btn_combined_marksheet_${student.roll}"),
+                    shape = RoundedCornerShape(8.dp),
+                    contentPadding = PaddingValues(vertical = 6.dp)
+                ) {
+                    Icon(Icons.Default.PictureAsPdf, contentDescription = null, tint = IslamicGold, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("৩ পরীক্ষার সমন্বিত মার্কশিট PDF", fontSize = 11.sp, color = IslamicGold, fontWeight = FontWeight.SemiBold)
+                }
+            } else {
+                Text(
+                    text = "তিন পরীক্ষার কোনো নম্বর এখনও এন্ট্রি করা হয়নি",
+                    style = MaterialTheme.typography.bodySmall.copy(color = IslamicTextMuted)
+                )
             }
         }
     }

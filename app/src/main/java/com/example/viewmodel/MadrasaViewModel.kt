@@ -79,6 +79,14 @@ class MadrasaViewModel(application: Application) : AndroidViewModel(application)
         repository.getExamResults(exam, year)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    // All 3 Exams Results combined for selected year
+    val allExamResultsForYear: StateFlow<List<ExamResult>> = selectedYear
+        .flatMapLatest { year -> repository.getExamResultsByYear(year) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    fun getAllExamResultsForYear(year: Int): Flow<List<ExamResult>> =
+        repository.getExamResultsByYear(year)
+
     // Transactions
     val allTransactions: StateFlow<List<FinancialTransaction>> = repository.allTransactions
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
