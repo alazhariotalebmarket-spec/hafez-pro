@@ -1,0 +1,6 @@
+{
+  "name": "Hafez Pro",
+  "description": "একটি আধুনিক হিফজ মাদ্রাসা ম্যানেজমেন্ট অ্যাপ - ছাত্র ভর্তি, বেতন আদায়, ছবক, হাজিরা, পরীক্ষার রেজাল্ট ও হিসাব সংরক্ষণ।",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
